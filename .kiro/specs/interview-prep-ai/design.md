@@ -13,7 +13,7 @@ The architecture follows a microservices pattern with clear separation between r
 ```mermaid
 graph TB
     subgraph "Client Layer"
-        WEB[React Web App]
+        WEB[React Web App - Mobile-First]
         EDITOR[Code Editor]
         MEDIA[Media Capture]
         LOCAL[Local Emotion Detection - TensorFlow.js]
@@ -21,6 +21,14 @@ graph TB
     
     subgraph "AWS Edge Layer"
         CDN[Amazon CloudFront + AWS WAF]
+    end
+    
+    subgraph "AI for Bharat Inclusivity Layer"
+        MULTILANG[Multilingual Support<br/>Hindi, Marathi, Tamil, Bengali]
+        TRANSLATE[Real-time Translation Lambda]
+        ACCENT[Accent-Aware Transcription<br/>AWS Transcribe Custom Vocabulary]
+        LOWBAND[Low-Bandwidth Adaptive Mode<br/>Compression & Quality Adjustment]
+        ACCESS[Accessibility Mode<br/>Voice-Only Interviews]
     end
     
     subgraph "API Layer"
@@ -76,9 +84,17 @@ graph TB
     end
     
     WEB --> CDN
-    CDN --> APIGW
-    CDN --> WSAPI
+    CDN --> MULTILANG
+    MULTILANG --> TRANSLATE
+    MULTILANG --> ACCENT
+    MULTILANG --> LOWBAND
+    MULTILANG --> ACCESS
+    TRANSLATE --> APIGW
+    ACCENT --> APIGW
+    LOWBAND --> APIGW
+    ACCESS --> WSAPI
     APIGW --> COGNITO
+    WSAPI --> COGNITO
     COGNITO --> ORCH
     WSAPI --> STATE
     MEDIA --> S3
@@ -134,6 +150,352 @@ graph TB
 - Lambda expensive for long-running jobs (Batch + Spot = 70% cheaper)
 - Batch better for GPU workloads (facial analysis)
 - Batch handles spot terminations automatically
+
+### AI for Bharat Inclusivity Layer
+
+The AI for Bharat Inclusivity Layer addresses the unique challenges faced by Indian job seekers, including language barriers, accent diversity, connectivity issues, and accessibility needs. This layer sits between the client and API gateway, providing transparent inclusivity features without requiring changes to core interview logic.
+
+**Multilingual Support (Hindi, Marathi, Tamil, Bengali)**
+
+Architecture:
+- Language detection at client layer (browser language + user preference)
+- UI localization using i18n libraries (React-i18next)
+- Interview questions translated in real-time via Translation Lambda
+- Candidate responses accepted in native language
+- Feedback reports generated in user's preferred language
+
+Implementation:
+```typescript
+interface MultilingualConfig {
+  supportedLanguages: ['en', 'hi', 'mr', 'ta', 'bn'];
+  defaultLanguage: 'en';
+  translationService: 'AWS Translate';
+  fallbackBehavior: 'english-with-warning';
+}
+
+// Translation Lambda
+interface TranslationLambda {
+  translateQuestion(text: string, targetLang: string): Promise<string>;
+  translateResponse(text: string, sourceLang: string): Promise<string>;
+  detectLanguage(text: string): Promise<string>;
+  cacheTranslations: true; // Cache in ElastiCache
+}
+```
+
+Cost Optimization:
+- Cache common translations in ElastiCache (90% hit rate expected)
+- AWS Translate pricing: $15 per million characters
+- Estimated cost: $0.05 per interview (assuming 3,000 characters)
+
+**Real-time Translation Lambda**
+
+Purpose: Translate interview questions and candidate responses in real-time
+
+Architecture:
+- Lambda function triggered by API Gateway
+- Integrates with AWS Translate for neural machine translation
+- Caches translations in ElastiCache (Redis) with 7-day TTL
+- Handles code snippets separately (no translation)
+- Preserves technical terms using custom terminology
+
+Implementation:
+```typescript
+// Real-time Translation Lambda
+export const handler = async (event: APIGatewayEvent) => {
+  const { text, sourceLang, targetLang, preserveCode } = JSON.parse(event.body);
+  
+  // Check cache first
+  const cacheKey = `translate:${sourceLang}:${targetLang}:${hash(text)}`;
+  const cached = await redis.get(cacheKey);
+  if (cached) return { statusCode: 200, body: cached };
+  
+  // Extract code blocks to preserve
+  const { textWithoutCode, codeBlocks } = extractCodeBlocks(text);
+  
+  // Translate using AWS Translate
+  const translated = await translateClient.translateText({
+    Text: textWithoutCode,
+    SourceLanguageCode: sourceLang,
+    TargetLanguageCode: targetLang,
+    TerminologyNames: ['tech-terms-glossary'],
+  });
+  
+  // Reinsert code blocks
+  const finalText = reinsertCodeBlocks(translated.TranslatedText, codeBlocks);
+  
+  // Cache for 7 days
+  await redis.setex(cacheKey, 604800, finalText);
+  
+  return { statusCode: 200, body: finalText };
+};
+```
+
+Performance:
+- Cache hit: < 50ms latency
+- Cache miss: < 500ms latency (AWS Translate)
+- Concurrent translations: Auto-scaling Lambda
+
+**Accent-Aware Transcription**
+
+Purpose: Improve transcription accuracy for Indian English accents and regional languages
+
+Architecture:
+- AWS Transcribe with custom vocabulary for Indian English
+- Language-specific models for Hindi, Tamil, Bengali, Marathi
+- Accent detection and model selection
+- Post-processing for common transcription errors
+
+Custom Vocabulary:
+```json
+{
+  "Phrases": [
+    {"Phrase": "prepone", "IPA": "priːˈpoʊn"},
+    {"Phrase": "revert back", "IPA": "rɪˈvɜːrt bæk"},
+    {"Phrase": "do the needful", "IPA": "duː ðə ˈniːdfʊl"},
+    {"Phrase": "out of station", "IPA": "aʊt əv ˈsteɪʃən"}
+  ],
+  "TechnicalTerms": [
+    "microservices", "kubernetes", "terraform", "GraphQL"
+  ]
+}
+```
+
+Implementation:
+```typescript
+interface AccentAwareTranscription {
+  transcribeWithAccent(
+    audioUrl: string, 
+    detectedAccent: 'indian-english' | 'hindi' | 'tamil' | 'bengali' | 'marathi'
+  ): Promise<Transcript>;
+  
+  customVocabulary: {
+    indianEnglish: 'indian-english-vocab';
+    technicalTerms: 'tech-terms-vocab';
+  };
+  
+  postProcessing: {
+    correctCommonErrors: true;
+    expandAbbreviations: true;
+    normalizeSpelling: true;
+  };
+}
+```
+
+Accuracy Improvement:
+- Standard AWS Transcribe: 85% accuracy for Indian accents
+- With custom vocabulary: 92% accuracy
+- Cost: Same as standard transcription ($0.024/minute)
+
+**Low-Bandwidth Adaptive Mode**
+
+Purpose: Enable interviews in areas with poor internet connectivity (common in tier 2/3 cities)
+
+Architecture:
+- Bandwidth detection at client layer
+- Adaptive video quality (1080p → 720p → 480p → audio-only)
+- Aggressive compression for low-bandwidth scenarios
+- Progressive upload with resume capability
+- Offline mode with local storage and sync
+
+Implementation:
+```typescript
+interface LowBandwidthMode {
+  detectBandwidth(): Promise<number>; // Mbps
+  
+  adaptiveQuality: {
+    high: { video: '1080p', audio: '128kbps', bandwidth: '>5Mbps' };
+    medium: { video: '720p', audio: '96kbps', bandwidth: '2-5Mbps' };
+    low: { video: '480p', audio: '64kbps', bandwidth: '0.5-2Mbps' };
+    minimal: { video: 'none', audio: '32kbps', bandwidth: '<0.5Mbps' };
+  };
+  
+  compression: {
+    video: 'H.265 with aggressive compression';
+    audio: 'Opus with variable bitrate';
+    chunking: '5-second chunks for progressive upload';
+  };
+  
+  offlineMode: {
+    localStorageLimit: '100MB';
+    syncWhenOnline: true;
+    notifyUserOfPendingSync: true;
+  };
+}
+```
+
+Bandwidth Optimization:
+- High bandwidth (>5 Mbps): Full quality, real-time upload
+- Medium bandwidth (2-5 Mbps): 720p video, chunked upload
+- Low bandwidth (0.5-2 Mbps): 480p video, aggressive compression
+- Minimal bandwidth (<0.5 Mbps): Audio-only mode, text-based interview
+
+Cost Impact:
+- Reduced storage costs due to lower quality media
+- Reduced data transfer costs
+- Estimated savings: 40% for low-bandwidth users
+
+**Accessibility Mode (Voice-Only Interviews)**
+
+Purpose: Support candidates with visual impairments or those preferring voice-only interaction
+
+Architecture:
+- Screen reader compatible UI (WCAG 2.1 AA compliant)
+- Voice-only interview mode (no video required)
+- Audio-based navigation and feedback
+- Keyboard shortcuts for all actions
+- High contrast mode and font size adjustment
+
+Implementation:
+```typescript
+interface AccessibilityMode {
+  voiceOnlyInterview: {
+    disableVideo: true;
+    audioOnlyTranscription: true;
+    textToSpeech: 'AWS Polly for question reading';
+    voiceNavigation: 'Voice commands for UI control';
+  };
+  
+  screenReaderSupport: {
+    ariaLabels: 'Complete ARIA labeling';
+    semanticHTML: 'Proper heading hierarchy';
+    keyboardNavigation: 'Full keyboard support';
+    focusManagement: 'Logical focus order';
+  };
+  
+  visualAccessibility: {
+    highContrastMode: true;
+    fontSizeAdjustment: '100% to 200%';
+    colorBlindMode: 'Deuteranopia, Protanopia, Tritanopia';
+  };
+  
+  cognitiveAccessibility: {
+    simplifiedLanguage: 'Option for simpler question phrasing';
+    extendedTime: 'Additional time for responses';
+    pauseResume: 'Pause interview anytime';
+  };
+}
+```
+
+AWS Polly Integration:
+- Text-to-speech for reading questions aloud
+- Neural voices for natural-sounding speech
+- Support for Indian English accent
+- Cost: $4 per million characters (~$0.02 per interview)
+
+**Mobile-First Optimization**
+
+Purpose: Enable interviews on mobile devices (primary internet access for many Indians)
+
+Architecture:
+- Responsive design with mobile-first approach
+- Touch-optimized UI components
+- Reduced data usage for mobile networks
+- Progressive Web App (PWA) for offline capability
+- Mobile-specific features (camera, microphone access)
+
+Implementation:
+```typescript
+interface MobileOptimization {
+  responsiveDesign: {
+    breakpoints: ['320px', '768px', '1024px', '1440px'];
+    mobileFirst: true;
+    touchTargets: '44px minimum';
+  };
+  
+  dataOptimization: {
+    lazyLoading: 'Images and components';
+    codesplitting: 'Route-based splitting';
+    compressionLevel: 'Maximum for mobile';
+    prefetching: 'Minimal, only critical resources';
+  };
+  
+  pwaFeatures: {
+    offlineSupport: true;
+    installable: true;
+    pushNotifications: 'Interview reminders';
+    backgroundSync: 'Upload when online';
+  };
+  
+  mobileSpecific: {
+    cameraAccess: 'Front/rear camera selection';
+    microphoneAccess: 'Noise cancellation';
+    orientationLock: 'Portrait mode for interviews';
+    batteryOptimization: 'Reduce processing when low battery';
+  };
+}
+```
+
+Performance Targets:
+- First Contentful Paint: < 1.5s on 3G
+- Time to Interactive: < 3.5s on 3G
+- Lighthouse Score: > 90 (Mobile)
+- Bundle Size: < 200KB (gzipped)
+
+**Integration with Core System**
+
+The AI for Bharat layer integrates seamlessly with the core interview system:
+
+1. **Language Flow**:
+   - User selects language preference in Cognito profile
+   - Translation Lambda translates questions before delivery
+   - Candidate responds in native language
+   - Translation Lambda translates to English for AI evaluation
+   - Feedback translated back to native language
+
+2. **Bandwidth Adaptation**:
+   - Client detects bandwidth on session start
+   - Adaptive mode selected automatically
+   - Quality adjusted dynamically during interview
+   - Fallback to audio-only if video fails
+
+3. **Accessibility Integration**:
+   - Accessibility preferences stored in Cognito user attributes
+   - Voice-only mode disables video analysis pipeline
+   - AWS Polly reads questions aloud
+   - Extended time limits applied automatically
+
+4. **Cost Impact**:
+   - Translation: +$0.05 per interview
+   - AWS Polly (accessibility): +$0.02 per interview
+   - Reduced bandwidth costs: -$0.10 per interview (low-bandwidth users)
+   - Net impact: -$0.03 per interview (cost reduction)
+
+**Monitoring & Analytics**
+
+Track inclusivity feature usage:
+```typescript
+interface InclusivityMetrics {
+  languageDistribution: {
+    english: number;
+    hindi: number;
+    marathi: number;
+    tamil: number;
+    bengali: number;
+  };
+  
+  bandwidthDistribution: {
+    high: number;
+    medium: number;
+    low: number;
+    minimal: number;
+  };
+  
+  accessibilityUsage: {
+    voiceOnly: number;
+    screenReader: number;
+    highContrast: number;
+    extendedTime: number;
+  };
+  
+  mobileUsage: {
+    mobile: number;
+    desktop: number;
+    tablet: number;
+  };
+}
+```
+
+This data helps optimize the platform for Indian users and demonstrates social impact to stakeholders.
 
 ### Security Architecture
 
@@ -347,473 +709,70 @@ Premium Tier:
 
 ## Components and Interfaces
 
-### Frontend Components
+### Key System Components
 
-**React Web Application**
-- **Interview Interface**: Real-time conversation UI with video preview
-- **Code Editor**: Integrated coding environment with syntax highlighting
-- **Media Capture Manager**: Handles WebRTC streams and local buffering
-- **Session Recovery**: Automatic reconnection and state restoration
-- **Local Emotion Detection**: TensorFlow.js-based facial analysis for real-time feedback
-- **CDN-Optimized Assets**: CloudFront delivery for sub-second page loads
+**Frontend (React + PWA)**
+- Mobile-first responsive design with offline support
+- Local TensorFlow.js for real-time emotion detection
+- WebRTC media capture with H.265/Opus encoding
+- Progressive upload with resume capability
 
-**Key Interfaces:**
-```typescript
-interface InterviewSession {
-  sessionId: string;
-  candidateId: string;
-  resumeContext: ResumeContext;
-  currentQuestion: Question;
-  responses: Response[];
-  mediaUrls: MediaUrls;
-  status: SessionStatus;
-  tier: 'free' | 'premium';
-}
+**Real-Time Layer (AWS Lambda)**
+- Interview Orchestrator (Node.js 18, ARM64, 512MB)
+- AI Interview Engine (Python 3.11, ARM64, 1024MB, Provisioned Concurrency)
+- Session Manager (Node.js 18, ARM64, 512MB)
+- Response Cache Service (Python 3.11, ARM64, 512MB)
 
-interface MediaCapture {
-  startRecording(): Promise<void>;
-  stopRecording(): Promise<MediaUrls>;
-  uploadChunk(chunk: Blob): Promise<void>;
-  getBufferedData(): Blob[];
-  encodeWithH265(): Promise<Blob>;
-  compressAudioWithOpus(): Promise<Blob>;
-}
+**Batch Processing Layer (AWS Batch + Spot Instances)**
+- Facial Analysis (MediaPipe, adaptive 0.5-2 FPS sampling)
+- Voice Analysis (openSMILE, 6,373 acoustic features)
+- Score Aggregator (combines multi-modal results)
 
-interface LocalEmotionDetector {
-  detectEmotion(videoFrame: ImageData): EmotionResult;
-  initializeTensorFlowJS(): Promise<void>;
-  getRealtimeFeedback(): EmotionPoint[];
-}
-```
-
-### Backend Core Services
-
-**Interview Orchestrator (AWS Lambda)**
-- Manages interview flow and state transitions
-- Coordinates between AI engine and session persistence
-- Handles resume context injection and question sequencing
-- Implements circuit breaker patterns for AI service failures
-- Manages tiered processing (free vs premium)
-- **Runtime**: Node.js 18 on ARM64 (Graviton2)
-- **Memory**: 512 MB
-- **Timeout**: 30 seconds
-- **Concurrency**: Reserved 10, Max 100
-- **VPC**: Private subnet with VPC endpoints
-
-**AI Interview Engine (AWS Lambda with Provisioned Concurrency)**
-- Integrates with AWS Bedrock or external LLM APIs
-- Generates resume-aware questions with company-specific styling
-- Evaluates technical responses for correctness and clarity
-- Maintains conversation context and generates dynamic follow-ups
-- Implements intelligent response caching with ElastiCache
-- Uses exponential backoff and circuit breaker for API failures
-- **Runtime**: Python 3.11 on ARM64 (Graviton2)
-- **Memory**: 1024 MB
-- **Timeout**: 60 seconds
-- **Provisioned Concurrency**: 2 instances (warm start)
-- **VPC**: Private subnet with Secrets Manager endpoint
-
-**Session Manager (AWS Lambda)**
-- Provides resilient session state management
-- Implements checkpoint-based recovery mechanisms
-- Handles concurrent session scaling and resource allocation
-- Manages session timeouts and graceful termination
-- Uses DynamoDB Global Secondary Indexes for fast recovery queries
-- Caches session state in ElastiCache for sub-second access
-- **Runtime**: Node.js 18 on ARM64 (Graviton2)
-- **Memory**: 512 MB
-- **Timeout**: 15 seconds
-- **VPC**: Private subnet with DynamoDB endpoint
-
-**Response Cache Service (AWS Lambda)**
-- Caches AI-generated responses based on answer similarity
-- Uses semantic hashing to identify similar responses
-- Reduces LLM API calls by 60% for common patterns
-- Implements TTL-based cache invalidation (24 hours)
-- Stores cached responses in ElastiCache with compression
-- **Runtime**: Python 3.11 on ARM64 (Graviton2)
-- **Memory**: 512 MB
-- **Timeout**: 10 seconds
-- **VPC**: Private subnet with ElastiCache access
-
-**Key Interfaces:**
-```typescript
-interface AIInterviewEngine {
-  generateQuestion(context: InterviewContext): Promise<Question>;
-  evaluateResponse(response: Response): Promise<Evaluation>;
-  generateFollowUp(evaluation: Evaluation): Promise<Question>;
-  getCachedResponse(responseHash: string): Promise<Question | null>;
-  cacheResponse(responseHash: string, question: Question): Promise<void>;
-}
-
-interface SessionManager {
-  createSession(candidateId: string, tier: 'free' | 'premium'): Promise<SessionId>;
-  saveCheckpoint(sessionId: string, state: SessionState): Promise<void>;
-  recoverSession(sessionId: string): Promise<SessionState>;
-  getCachedSession(sessionId: string): Promise<SessionState | null>;
-}
-
-interface ResponseCache {
-  computeSemanticHash(response: string): string;
-  getCachedQuestion(hash: string): Promise<Question | null>;
-  cacheQuestion(hash: string, question: Question, ttl: number): Promise<void>;
-}
-
-// IAM Role for Interview Orchestrator Lambda
-interface OrchestratorLambdaRole {
-  policies: {
-    dynamodb: ['PutItem', 'GetItem', 'UpdateItem'] on 'interview-sessions' table;
-    secretsmanager: ['GetSecretValue'] on 'ai-api-key' secret;
-    kms: ['Decrypt', 'GenerateDataKey'] on interview KMS key;
-    logs: ['CreateLogGroup', 'CreateLogStream', 'PutLogEvents'];
-    xray: ['PutTraceSegments', 'PutTelemetryRecords'];
-  };
-}
-
-// IAM Role for AI Engine Lambda
-interface AIEngineLambdaRole {
-  policies: {
-    secretsmanager: ['GetSecretValue'] on 'llm-api-key' secret;
-    elasticache: ['Connect'] to Redis cluster;
-    kms: ['Decrypt'] on interview KMS key;
-    bedrock: ['InvokeModel'] on specified models;
-    logs: ['CreateLogGroup', 'CreateLogStream', 'PutLogEvents'];
-    xray: ['PutTraceSegments', 'PutTelemetryRecords'];
-  };
-}
-```
-
-### Analysis Pipeline Components
-
-**Step Functions Orchestrator**
-Based on AWS best practices for multi-stage AI workflows, the orchestrator coordinates parallel analysis tasks with proper error handling and retry logic. The workflow implements the following pattern:
-
-```json
-{
-  "Comment": "Multi-modal interview analysis pipeline",
-  "StartAt": "ParallelAnalysis",
-  "States": {
-    "ParallelAnalysis": {
-      "Type": "Parallel",
-      "Branches": [
-        {
-          "StartAt": "FacialAnalysis",
-          "States": {
-            "FacialAnalysis": {
-              "Type": "Task",
-              "Resource": "arn:aws:batch:region:account:job-queue/facial-analysis"
-            }
-          }
-        },
-        {
-          "StartAt": "VoiceAnalysis", 
-          "States": {
-            "VoiceAnalysis": {
-              "Type": "Task",
-              "Resource": "arn:aws:batch:region:account:job-queue/voice-analysis"
-            }
-          }
-        }
-      ],
-      "Next": "AggregateResults"
-    }
-  }
-}
-```
-
-**Facial Analysis Pipeline**
-Leverages MediaPipe's BlazeFace model for real-time face detection and landmark extraction. The pipeline uses adaptive sampling to optimize costs:
-
-- **Adaptive Frame Sampling**: 
-  - 0.5 FPS during low-stress periods (detected via voice analysis)
-  - 2 FPS during high-stress moments (voice stress indicators present)
-  - Reduces processing costs by 30-40% compared to fixed 1 FPS
-- **Local Browser Processing**: TensorFlow.js runs basic emotion detection client-side for real-time feedback
-- **Cloud Processing**: MediaPipe Face Landmarker identifies detailed facial landmarks
-- **Emotion Classification**: Custom lightweight classifier trained on facial action units
-- **Confidence Timeline**: Generates time-series data for stress and engagement levels
-- **Privacy Protection**: Masks facial features in stored video after analysis completion
-
-**Voice Analysis Pipeline**
-Utilizes openSMILE for comprehensive acoustic feature extraction with real-time processing capabilities:
-
-- **Voice Activity Detection**: Removes silence periods to reduce processing costs by 20-30%
-- **Feature Extraction**: openSMILE generates 6,373 acoustic features per audio segment
-- **Emotion Classification**: SVM classifier trained on prosodic and spectral features
-- **Confidence Metrics**: Analyzes speech rate, hesitation patterns, and vocal stress indicators
-- **Stress Detection**: Identifies high-stress moments to trigger adaptive video sampling
-
-**Tiered Processing Strategy**
-- **Free Tier**: 
-  - Basic transcription + voice analysis only
-  - Batch processing during off-peak hours (2-6 AM UTC)
-  - Uses AWS Spot Instances (70% cost reduction)
-  - No facial analysis or detailed behavioral metrics
-- **Premium Tier**:
-  - Full multi-modal analysis (facial + voice + technical)
-  - Real-time processing with on-demand instances
-  - Adaptive sampling for cost optimization
-  - Comprehensive behavioral analysis
-
-**Key Interfaces:**
-```typescript
-interface FacialAnalysisResult {
-  emotionTimeline: EmotionPoint[];
-  confidenceScore: number;
-  stressIndicators: StressEvent[];
-  engagementLevel: number;
-  samplingRate: number; // Adaptive: 0.5-2 FPS
-  localAnalysisUsed: boolean;
-}
-
-interface VoiceAnalysisResult {
-  voiceConfidence: ConfidencePoint[];
-  emotionalState: EmotionClassification[];
-  speechMetrics: SpeechMetrics;
-  stressMarkers: StressMarker[];
-  highStressPeriods: TimeRange[]; // Triggers adaptive video sampling
-}
-
-interface TieredAnalysisConfig {
-  tier: 'free' | 'premium';
-  enableFacialAnalysis: boolean;
-  enableVoiceAnalysis: boolean;
-  processingPriority: 'realtime' | 'batch';
-  useSpotInstances: boolean;
-}
-```
+**Storage & Caching**
+- S3 with SSE-KMS encryption and Intelligent-Tiering
+- DynamoDB with On-Demand pricing and KMS encryption
+- ElastiCache (Redis) for session state and AI response caching
 
 ## Data Models
 
-### Core Domain Models
+**Interview Session**
+- Session ID, candidate ID, tier (free/premium)
+- Resume context with encrypted PII fields
+- Questions, responses, media URLs
+- Checkpoints for recovery
+- KMS encryption key ID
 
-**Interview Session Model**
-```typescript
-interface InterviewSession {
-  sessionId: string;
-  candidateId: string;
-  createdAt: Date;
-  updatedAt: Date;
-  status: 'active' | 'paused' | 'completed' | 'failed';
-  tier: 'free' | 'premium';
-  resumeContext: ResumeContext;
-  questions: Question[];
-  responses: Response[];
-  mediaUrls: MediaUrls;
-  checkpoints: SessionCheckpoint[];
-  encryptionKeyId: string; // For field-level encryption
-}
+**Analysis Results**
+- Technical, communication, and behavioral scores
+- Detailed feedback with timestamps
+- Processing cost tracking
+- Tier-specific features
 
-interface ResumeContext {
-  skills: Skill[];
-  experience: Experience[];
-  projects: Project[];
-  education: Education[];
-  parsedAt: Date;
-  encryptedFields: string[]; // Fields with sensitive data
-}
-```
+**Security & Audit**
+- Audit logs (2-year retention)
+- Encryption metadata (KMS key rotation)
+- User deletion requests with cryptographic erasure
+- Cost metrics per session
 
-**Analysis Results Model**
-```typescript
-interface AnalysisResult {
-  sessionId: string;
-  technicalScore: TechnicalEvaluation;
-  communicationScore: CommunicationEvaluation;
-  behavioralScore: BehavioralEvaluation;
-  overallScore: number;
-  feedback: FeedbackReport;
-  createdAt: Date;
-  tier: 'free' | 'premium';
-  processingCost: number; // Track costs per analysis
-}
+## Testing Strategy
 
-interface TechnicalEvaluation {
-  correctness: number;
-  codeQuality: number;
-  problemSolving: number;
-  explanationClarity: number;
-  detailedFeedback: string[];
-}
+**Unit Testing**
+- Resume parsing with known skill sets
+- Media processing edge cases (corrupted files, unusual formats)
+- AI service integration error conditions
+- Authentication and authorization workflows
 
-interface BehavioralEvaluation {
-  confidenceLevel: number;
-  stressManagement: number;
-  engagement: number;
-  emotionalStability: number;
-  confidenceMismatchEvents: ConfidenceMismatch[];
-  availableForTier: boolean; // Premium only
-}
-```
+**Property-Based Testing**
+- Framework: Hypothesis (Python), fast-check (TypeScript)
+- 100+ iterations per property test
+- Validates universal properties across all inputs
+- Tests: resume-aware generation, timing consistency, media capture, multi-modal analysis, security, cost optimization
 
-### Media Processing Models
-
-**Media Timeline Model**
-```typescript
-interface MediaTimeline {
-  sessionId: string;
-  audioUrl: string; // Opus-encoded
-  videoUrl: string; // H.265-encoded
-  transcriptSegments: TranscriptSegment[];
-  facialEmotions: EmotionPoint[];
-  voiceMetrics: VoicePoint[];
-  synchronizationOffset: number;
-  compressionRatio: number;
-  storageSize: number;
-  retentionPolicy: DataRetentionPolicy;
-}
-
-interface EmotionPoint {
-  timestamp: number;
-  emotion: 'confident' | 'nervous' | 'engaged' | 'stressed';
-  intensity: number;
-  facialLandmarks?: FacialLandmark[];
-  samplingRate: number; // 0.5 or 2 FPS
-  detectedLocally: boolean; // TensorFlow.js vs cloud
-}
-
-interface DataRetentionPolicy {
-  rawMediaRetentionDays: 30;
-  analysisResultsRetentionDays: 365;
-  aggregateMetricsRetentionDays: -1; // Indefinite
-  scheduledDeletionDate?: Date;
-}
-```
-
-### Security Models
-
-**Audit Log Model**
-```typescript
-interface AuditLog {
-  logId: string;
-  timestamp: Date;
-  userId: string;
-  action: 'read' | 'write' | 'delete' | 'access';
-  resourceType: 'session' | 'media' | 'analysis' | 'resume';
-  resourceId: string;
-  ipAddress: string;
-  userAgent: string;
-  success: boolean;
-  errorMessage?: string;
-  retentionYears: 2;
-}
-
-interface EncryptionMetadata {
-  keyId: string;
-  algorithm: 'AES-256-GCM';
-  rotationDate: Date;
-  nextRotationDate: Date;
-}
-
-interface UserDeletionRequest {
-  userId: string;
-  requestedAt: Date;
-  scheduledDeletionAt: Date; // 24 hours after request
-  status: 'pending' | 'in_progress' | 'completed';
-  deletedResources: string[];
-  cryptographicErasureCompleted: boolean;
-}
-```
-
-### Cost Tracking Models
-
-**Cost Metrics Model**
-```typescript
-interface CostMetrics {
-  sessionId: string;
-  tier: 'free' | 'premium';
-  llmApiCalls: number;
-  llmTokensUsed: number;
-  llmCost: number;
-  videoProcessingMinutes: number;
-  videoProcessingCost: number;
-  audioProcessingMinutes: number;
-  audioProcessingCost: number;
-  storageGB: number;
-  storageCost: number;
-  totalCost: number;
-  spotInstanceSavings: number;
-  cacheSavings: number;
-  createdAt: Date;
-}
-```
-
-## Correctness Properties
-
-*A property is a characteristic or behavior that should hold true across all valid executions of a system—essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
-
-### Property Reflection
-
-After analyzing all acceptance criteria, several properties can be consolidated to eliminate redundancy:
-
-- Resume-question relationship properties (1.1, 2.2, 2.3) combine into comprehensive resume-aware generation
-- Media capture properties (3.1, 3.3, 3.5) consolidate into complete capture workflow validation
-- Analysis completeness properties (4.2, 5.3, 7.1, 7.2) merge into comprehensive evaluation coverage
-- Timeline properties (4.3, 5.5) combine into synchronized multi-modal timeline generation
-- Feedback properties (9.1, 9.4) consolidate into comprehensive feedback specificity
-- Resilience properties (4.4, 11.1, 11.2) merge into fault tolerance validation
-
-### Core Correctness Properties
-
-**Property 1: Resume-Aware Question Generation**
-*For any* uploaded resume and interview session, generated questions should reference specific resume elements (skills, projects, or experience) in at least 60% of technical questions, and follow-up questions should probe deeper when unfamiliar technologies are mentioned.
-**Validates: Requirements 1.1, 2.2, 2.3**
-
-**Property 2: AI Response Timing Consistency**
-*For any* candidate response during an interview, the AI interviewer should generate contextually appropriate follow-up questions within 5 seconds while maintaining conversation coherence by referencing previous answers.
-**Validates: Requirements 1.2, 2.5**
-
-**Property 3: Complete Media Capture Workflow**
-*For any* interview session, the system should simultaneously capture audio, video, and coding interactions with proper timing information, compress the data for cost efficiency, and upload all captured media to secure storage within 2 minutes of session completion.
-**Validates: Requirements 3.1, 3.3, 3.5**
-
-**Property 4: Multi-Modal Analysis Completeness**
-*For any* completed interview, the analysis pipeline should generate comprehensive evaluations covering all specified dimensions: technical correctness/efficiency/quality, communication clarity/accuracy/completeness, and behavioral stress/confidence/engagement levels.
-**Validates: Requirements 4.2, 5.3, 7.1, 7.2**
-
-**Property 5: Synchronized Timeline Generation**
-*For any* interview with audio and video data, the system should generate temporally synchronized timelines for facial emotions, voice confidence, and transcript segments, with proper interpolation for missing data points.
-**Validates: Requirements 4.3, 5.5**
-
-**Property 6: Frame Processing Consistency**
-*For any* video input, the facial analysis pipeline should sample frames at exactly 1 FPS regardless of input frame rate, focus on the primary face when multiple faces are detected, and maintain consistent emotion classification across all processed frames.
-**Validates: Requirements 4.1, 4.5**
-
-**Property 7: Voice Processing Pipeline**
-*For any* audio input, the voice analysis pipeline should apply voice activity detection to remove silence, extract openSMILE acoustic features, and generate confidence metrics including hesitation patterns, speech rate variations, and vocal stress indicators.
-**Validates: Requirements 5.1, 5.2**
-
-**Property 8: Real-Time Transcription Performance**
-*For any* spoken input during an interview, the Web Speech API should provide transcription results within 2 seconds, handle multiple accents without configuration, and flag low-confidence words for user feedback.
-**Validates: Requirements 6.1, 6.2, 6.4**
-
-**Property 9: Holistic Score Aggregation**
-*For any* completed analysis, the aggregation service should combine technical scores, voice metrics, and facial emotion data into a weighted overall assessment, detect confidence mismatches between modalities, and correlate stress spikes with specific interview content.
-**Validates: Requirements 8.1, 8.2, 8.3**
-
-**Property 10: Comprehensive Feedback Generation**
-*For any* interview assessment, the feedback system should provide specific timestamps and examples for all identified strengths and weaknesses, explain how each metric contributed to the overall score, and generate actionable improvement strategies with concrete practice recommendations.
-**Validates: Requirements 9.1, 9.4, 9.2, 9.3**
-
-**Property 11: System Resilience and Recovery**
-*For any* network interruption, browser crash, or system failure during an interview, the system should preserve interview state, enable seamless recovery from the last checkpoint, and maintain data integrity without loss of captured media or conversation context.
-**Validates: Requirements 4.4, 11.1, 11.2**
-
-**Property 12: Performance Under Load**
-*For any* number of concurrent interviews up to system capacity, AI interaction response times should remain under 5 seconds, auto-scaling should provision resources within 3 minutes of demand spikes, and spot instance terminations should not cause data loss.
-**Validates: Requirements 10.1, 10.2, 10.3**
-
-**Property 13: Data Security and Privacy**
-*For any* user data in the system, all transmissions should use TLS 1.3 encryption with certificate pinning, all stored media should use AES-256 encryption, user deletion requests should complete within 24 hours with cryptographic erasure, analysis pipelines should redact PII from transcripts, and all data access should be logged with 2-year retention.
-**Validates: Requirements 12.1, 12.2, 12.4, 12.5, 12.8, 12.10, 12.11**
-
-**Property 14: Session State Persistence**
-*For any* active interview session, the system should save progress checkpoints every 30 seconds, provide timeout warnings with extension options, and maintain conversation context across pause/resume cycles.
-**Validates: Requirements 11.4, 11.5, 11.3**
-
-**Property 15: Cost Optimization Effectiveness**
-*For any* system usage pattern, the cost optimization system should implement tiered analysis based on service level, automatically archive old data according to lifecycle policies, and maintain processing costs within defined budget constraints.
-**Validates: Requirements 10.4, 10.5**
+**Integration & Load Testing**
+- End-to-end interview simulation
+- Multi-modal analysis pipeline validation
+- Concurrent sessions: 10, 50, 100, 500 users
+- Performance benchmarks: AI < 5s, upload < 2min, analysis < 10min
 
 ## Error Handling
 
@@ -1156,97 +1115,28 @@ Cost per interview (blended): $0.78
 
 ## Deployment & Operations
 
-### Infrastructure as Code
+**Infrastructure as Code**
+- AWS CDK (TypeScript) for all infrastructure
+- Separate stacks: Networking, Security, Storage, Compute, API, Monitoring
+- Environment separation: Dev (single-AZ), Staging (multi-AZ), Prod (multi-AZ + HA)
 
-**AWS CDK (TypeScript)**
-- All infrastructure defined as code using AWS CDK
-- Separate stacks for logical separation and independent deployment:
-  - **NetworkingStack**: VPC, subnets, NAT Gateway, VPC endpoints, security groups
-  - **SecurityStack**: KMS keys, Secrets Manager, IAM roles, Cognito User Pools
-  - **StorageStack**: S3 buckets, DynamoDB tables, ElastiCache cluster
-  - **ComputeStack**: Lambda functions, AWS Batch compute environments, ECS task definitions
-  - **APIStack**: API Gateway, CloudFront, WAF rules
-  - **MonitoringStack**: CloudWatch dashboards, alarms, X-Ray configuration
+**CI/CD Pipeline**
+- GitHub Actions for automated testing and deployment
+- Automated tests: unit, integration, property-based, security scans
+- Blue-green deployment with automatic rollback on errors
+- Manual approval required for production
 
-**Environment Separation**
-- **Dev**: Single-AZ deployment, minimal resources, no spot instances
-- **Staging**: Multi-AZ deployment, production-like configuration, spot instances enabled
-- **Prod**: Multi-AZ deployment, high availability, auto-scaling, spot instances for batch
+**Monitoring & Observability**
+- CloudWatch Dashboards for API, Lambda, DynamoDB, Batch metrics
+- CloudWatch Alarms for error rates, latency, costs
+- AWS X-Ray for distributed tracing
+- GuardDuty for security monitoring
 
-**CDK Stack Example**
-```typescript
-// networking-stack.ts
-export class NetworkingStack extends Stack {
-  public readonly vpc: ec2.Vpc;
-  public readonly s3Endpoint: ec2.GatewayVpcEndpoint;
-  public readonly dynamoEndpoint: ec2.GatewayVpcEndpoint;
-  
-  constructor(scope: Construct, id: string, props: StackProps) {
-    super(scope, id, props);
-    
-    // VPC with private subnets
-    this.vpc = new ec2.Vpc(this, 'InterviewPrepVPC', {
-      maxAzs: 2,
-      natGateways: 1,
-      subnetConfiguration: [
-        {
-          name: 'Public',
-          subnetType: ec2.SubnetType.PUBLIC,
-        },
-        {
-          name: 'Private',
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-        },
-      ],
-    });
-    
-    // VPC Gateway Endpoints (no cost)
-    this.s3Endpoint = this.vpc.addGatewayEndpoint('S3Endpoint', {
-      service: ec2.GatewayVpcEndpointAwsService.S3,
-    });
-    
-    this.dynamoEndpoint = this.vpc.addGatewayEndpoint('DynamoEndpoint', {
-      service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
-    });
-    
-    // VPC Interface Endpoints
-    this.vpc.addInterfaceEndpoint('SecretsManagerEndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
-    });
-    
-    this.vpc.addInterfaceEndpoint('STSEndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.STS,
-    });
-  }
-}
-
-// security-stack.ts
-export class SecurityStack extends Stack {
-  public readonly kmsKey: kms.Key;
-  public readonly userPool: cognito.UserPool;
-  
-  constructor(scope: Construct, id: string, props: StackProps) {
-    super(scope, id, props);
-    
-    // KMS Customer Managed Key
-    this.kmsKey = new kms.Key(this, 'InterviewKMSKey', {
-      enableKeyRotation: true,
-      description: 'KMS key for interview data encryption',
-      alias: 'interview-prep-key',
-    });
-    
-    // Cognito User Pool
-    this.userPool = new cognito.UserPool(this, 'InterviewUserPool', {
-      userPoolName: 'interview-prep-users',
-      selfSignUpEnabled: true,
-      signInAliases: { email: true },
-      autoVerify: { email: true },
-      mfa: cognito.Mfa.OPTIONAL,
-      mfaSecondFactor: {
-        sms: true,
-        otp: true,
-      },
-      passwordPolicy: {
+**Disaster Recovery**
+- DynamoDB point-in-time recovery (35-day retention)
+- S3 versioning for critical buckets
+- Multi-region failover with Route 53
+- RTO: 4 hours, RPO: 1 hour
         minLength: 12,
         requireLowercase: true,
         requireUppercase: true,
