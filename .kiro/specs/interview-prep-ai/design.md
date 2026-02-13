@@ -10,119 +10,64 @@ The architecture follows a microservices pattern with clear separation between r
 
 ### High-Level AWS Architecture
 
-```mermaid
-graph TB
-    subgraph "Client Layer"
-        WEB[React Web App - Mobile-First]
-        EDITOR[Code Editor]
-        MEDIA[Media Capture]
-        LOCAL[Local Emotion Detection - TensorFlow.js]
-    end
-    
-    subgraph "AWS Edge Layer"
-        CDN[Amazon CloudFront + AWS WAF]
-    end
-    
-    subgraph "AI for Bharat Inclusivity Layer"
-        MULTILANG[Multilingual Support<br/>Hindi, Marathi, Tamil, Bengali]
-        TRANSLATE[Real-time Translation Lambda]
-        ACCENT[Accent-Aware Transcription<br/>AWS Transcribe Custom Vocabulary]
-        LOWBAND[Low-Bandwidth Adaptive Mode<br/>Compression & Quality Adjustment]
-        ACCESS[Accessibility Mode<br/>Voice-Only Interviews]
-    end
-    
-    subgraph "API Layer"
-        APIGW[Amazon API Gateway REST + WAF]
-        WSAPI[Amazon API Gateway WebSocket]
-        COGNITO[AWS Cognito User Pools + Identity Pools]
-    end
-    
-    subgraph "VPC - Private Subnets"
-        subgraph "Real-Time Processing - AWS Lambda"
-            ORCH[Interview Orchestrator Lambda]
-            AI[AI Interview Engine Lambda - Provisioned Concurrency]
-            STATE[Session Manager Lambda]
-            CACHE_SVC[Response Cache Service Lambda]
-        end
-        
-        subgraph "Batch Processing - AWS Batch"
-            BATCH[AWS Batch Compute Environment - Spot Instances]
-            FACE[Facial Analysis Job - ECS Task]
-            VOICE[Voice Analysis Job - ECS Task]
-            AGG[Score Aggregator Job - ECS Task]
-        end
-    end
-    
-    subgraph "Storage Layer - Encrypted"
-        S3[S3 Media Storage - SSE-KMS]
-        DB[(DynamoDB - KMS Encrypted)]
-        CACHE[(ElastiCache Redis)]
-    end
-    
-    subgraph "Orchestration"
-        SF[AWS Step Functions]
-    end
-    
-    subgraph "Security & Secrets"
-        KMS[AWS KMS - Customer Managed Keys]
-        SECRETS[AWS Secrets Manager]
-        GUARD[AWS GuardDuty]
-        CONFIG[AWS Config]
-    end
-    
-    subgraph "VPC Networking"
-        VPC_S3[VPC Gateway Endpoint - S3]
-        VPC_DDB[VPC Gateway Endpoint - DynamoDB]
-        VPC_SM[VPC Interface Endpoint - Secrets Manager]
-        NAT[NAT Gateway - External APIs Only]
-    end
-    
-    subgraph "Monitoring & Logging"
-        CW[CloudWatch Logs & Metrics]
-        XRAY[AWS X-Ray]
-        COST[AWS Cost Explorer]
-    end
-    
-    WEB --> CDN
-    CDN --> MULTILANG
-    MULTILANG --> TRANSLATE
-    MULTILANG --> ACCENT
-    MULTILANG --> LOWBAND
-    MULTILANG --> ACCESS
-    TRANSLATE --> APIGW
-    ACCENT --> APIGW
-    LOWBAND --> APIGW
-    ACCESS --> WSAPI
-    APIGW --> COGNITO
-    WSAPI --> COGNITO
-    COGNITO --> ORCH
-    WSAPI --> STATE
-    MEDIA --> S3
-    ORCH --> AI
-    ORCH --> DB
-    AI --> CACHE
-    AI --> CACHE_SVC
-    STATE --> CACHE
-    STATE --> DB
-    S3 --> SF
-    SF --> BATCH
-    BATCH --> FACE
-    BATCH --> VOICE
-    BATCH --> AGG
-    AGG --> DB
-    ORCH --> VPC_S3
-    ORCH --> VPC_DDB
-    AI --> VPC_SM
-    AI --> SECRETS
-    ORCH --> SECRETS
-    S3 -.->|Encrypted with| KMS
-    DB -.->|Encrypted with| KMS
-    SECRETS -.->|Encrypted with| KMS
-    GUARD --> CW
-    APIGW --> CW
-    ORCH --> XRAY
-    AI --> XRAY
-```
+![Architecture Diagram](./architecture-diagram.png)
+
+**Architecture Overview:**
+
+The system follows a layered architecture with clear separation of concerns:
+
+**Client Layer:**
+- React Web App (Mobile-First PWA)
+- Local Batch processing for offline capability
+- Media Capture for audio/video recording
+
+**Edge & CDN Layer:**
+- Amazon CloudFront for content delivery
+- AWS WAF for security protection
+
+**API Layer:**
+- API Gateway (REST) for synchronous requests
+- API Gateway (WebSocket) for real-time communication
+- AWS Cognito for authentication and authorization
+
+**Real-Time Processing Layer (AWS Lambda):**
+- AI Interview Engine Lambda (with Provisioned Concurrency)
+- Interview Orchestrator Lambda
+- Session Manager Lambda
+- Response Cache Service Lambda
+
+**Batch Processing Layer (AWS Batch):**
+- Step Functions for workflow orchestration
+- Batch Analysis Jobs (Spot Instances):
+  - Facial Analysis Job
+  - Voice Analysis Job
+  - Aggregator Job
+
+**Storage Layer:**
+- Amazon S3 (Media) with SSE-KMS encryption
+- Amazon DynamoDB for session state and results
+- Amazon ElastiCache (Redis) for caching
+
+**Security Layer:**
+- AWS KMS for encryption key management
+- AWS Secrets Manager for credentials
+- AWS GuardDuty for threat detection
+- AWS Config for compliance monitoring
+
+**Monitoring Layer:**
+- Amazon CloudWatch for logs and metrics
+- AWS X-Ray for distributed tracing
+
+**Data Flow:**
+1. User authenticates via Cognito
+2. Client uploads media to S3 (encrypted with KMS)
+3. Real-time interview conducted via WebSocket + Lambda
+4. AI Engine generates questions (cached in Redis)
+5. Session state persisted in DynamoDB
+6. Post-interview: Step Functions triggers batch analysis
+7. Batch jobs process video/audio on Spot Instances
+8. Results aggregated and stored in DynamoDB
+9. All actions logged to CloudWatch and monitored by GuardDuty
 
 ### AWS Service Selection Rationale
 
