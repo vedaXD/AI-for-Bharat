@@ -26,10 +26,15 @@ InterviewPrep AI is a fully autonomous interview practice and analysis platform 
 #### Acceptance Criteria
 
 1. WHEN a candidate starts an interview session, THE AI_Interviewer SHALL generate opening questions based on the candidate's resume content
-2. WHEN a candidate provides an answer, THE AI_Interviewer SHALL evaluate the response and generate appropriate follow-up questions within 5 seconds
-3. WHEN the interview reaches the designated time limit, THE AI_Interviewer SHALL conclude the session gracefully and initiate analysis
+2. WHEN a candidate provides an answer, THE AI_Interviewer Lambda function SHALL evaluate the response and generate appropriate follow-up questions within 5 seconds
+3. WHEN the interview reaches the designated time limit, THE AI_Interviewer SHALL conclude the session gracefully and initiate AWS Step Functions workflow for analysis
 4. WHERE different company styles are selected, THE AI_Interviewer SHALL adapt questioning patterns to match the specified company culture
 5. WHEN technical questions are asked, THE AI_Interviewer SHALL evaluate both correctness and explanation quality
+6. THE System SHALL cache AI responses in Amazon ElastiCache (Redis) for similar answer patterns to reduce response time to 1-2 seconds
+7. WHEN AI generation fails, THE System SHALL fallback to cached question templates stored in S3 within 1 second
+8. THE System SHALL use CloudFront CDN to serve pre-computed question templates with sub-second latency
+9. THE AI_Interviewer Lambda SHALL use AWS Bedrock or external LLM APIs with secrets stored in AWS Secrets Manager
+10. THE System SHALL use Lambda Provisioned Concurrency for the AI Interview Engine to ensure consistent cold-start performance
 
 ### Requirement 2: Resume-Aware Question Generation
 
@@ -61,11 +66,13 @@ InterviewPrep AI is a fully autonomous interview practice and analysis platform 
 
 #### Acceptance Criteria
 
-1. WHEN video data is processed, THE Facial_Analysis_Pipeline SHALL sample frames at 1 FPS to balance accuracy and cost
+1. WHEN video data is processed, THE Facial_Analysis_Pipeline SHALL use adaptive sampling: 0.5 FPS during low-stress periods and 2 FPS during high-stress moments
 2. WHEN facial landmarks are detected, THE Emotion_Classifier SHALL identify stress, confidence, and engagement levels for each frame
 3. WHEN emotion analysis is complete, THE System SHALL generate a stress timeline showing confidence changes throughout the interview
 4. IF facial detection fails for any frame, THE System SHALL interpolate emotion data from surrounding frames
 5. WHEN multiple faces are detected, THE System SHALL focus analysis on the primary face (largest bounding box)
+6. THE System SHALL run basic facial emotion detection locally in the browser using TensorFlow.js for real-time feedback
+7. WHEN storing analyzed video, THE System SHALL mask facial features after analysis completion to protect privacy
 
 ### Requirement 5: Voice Pattern Analysis
 
@@ -85,11 +92,13 @@ InterviewPrep AI is a fully autonomous interview practice and analysis platform 
 
 #### Acceptance Criteria
 
-1. WHEN a candidate speaks, THE Web_Speech_API SHALL provide real-time transcription with less than 2-second latency
+1. WHEN a candidate speaks, THE Transcription_System SHALL provide real-time transcription with less than 1-second latency using AWS Transcribe streaming
 2. WHEN transcription confidence is low, THE System SHALL indicate uncertain words to the candidate
 3. WHEN the interview is complete, THE System SHALL use the real-time transcript for post-interview NLP analysis
 4. THE Transcription_System SHALL handle multiple accents and speaking styles without requiring user configuration
 5. WHEN audio quality is poor, THE System SHALL request the candidate to repeat unclear responses
+6. THE System SHALL deliver partial transcripts word-by-word as they become available for immediate feedback
+7. WHEN AWS Transcribe is unavailable, THE System SHALL fallback to Web Speech API with degraded latency
 
 ### Requirement 7: Technical Answer Evaluation
 
@@ -127,17 +136,32 @@ InterviewPrep AI is a fully autonomous interview practice and analysis platform 
 4. THE Feedback_System SHALL explain how each evaluation metric contributed to the overall score
 5. WHEN behavioral patterns are detected, THE System SHALL provide actionable advice for improving interview presence and confidence
 
-### Requirement 10: Scalable Cloud Architecture
+### Requirement 10: Scalable AWS Cloud Architecture
 
-**User Story:** As a platform operator, I want a cost-effective, scalable system that can handle multiple concurrent interviews, so that the platform can serve many users without performance degradation.
+**User Story:** As a platform operator, I want a cost-effective, scalable AWS serverless and batch architecture that can handle multiple concurrent interviews, so that the platform can serve many users without performance degradation.
 
 #### Acceptance Criteria
 
-1. WHEN multiple interviews run simultaneously, THE System SHALL maintain response times under 5 seconds for AI interactions
-2. WHEN processing demand increases, THE Auto_Scaling_System SHALL provision additional compute resources within 3 minutes
-3. WHEN using AWS Spot Instances, THE System SHALL handle instance terminations gracefully without losing interview data
-4. THE Cost_Optimization_System SHALL use tiered analysis (free vs premium) to control processing expenses
-5. WHEN storage costs accumulate, THE System SHALL implement automated data lifecycle policies to archive old interview data
+1. WHEN handling real-time interview interactions, THE System SHALL use AWS Lambda for auto-scaling and pay-per-use pricing
+2. WHEN processing long-running analysis jobs, THE System SHALL use AWS Batch with EC2 Spot Instances for cost optimization
+3. WHEN multiple interviews run simultaneously, THE System SHALL maintain Lambda response times under 5 seconds for AI interactions
+4. WHEN AI response demand is high, THE System SHALL use Lambda Provisioned Concurrency for consistent performance
+5. WHEN processing demand increases, THE AWS Lambda auto-scaling SHALL handle traffic spikes without manual intervention
+6. WHEN using AWS Batch with Spot Instances, THE System SHALL handle instance terminations gracefully without losing interview data
+7. THE Cost_Optimization_System SHALL use tiered analysis (free vs premium) to control processing expenses
+8. WHEN storing interview data, THE System SHALL use S3 Intelligent-Tiering for automatic cost optimization
+9. WHEN storing interview data, THE System SHALL implement S3 lifecycle policies: 30 days Standard → Glacier → Delete
+10. WHEN encoding media files, THE System SHALL use H.265 codec for video and Opus codec for audio to reduce storage costs by 40%
+11. WHEN processing free tier interviews, THE System SHALL use AWS Batch with 100% spot instances during off-peak hours (2-6 AM UTC)
+12. WHEN processing premium tier interviews, THE System SHALL use AWS Batch with 50% spot instances and 50% on-demand instances
+13. THE System SHALL implement adaptive video sampling: 0.5 FPS during low-stress periods and 2 FPS during high-stress moments
+14. WHEN storing interview data, THE System SHALL retain raw media for 30 days, analysis results for 1 year, and aggregate metrics indefinitely
+15. THE System SHALL cache common AI responses in Amazon ElastiCache (Redis) to reduce LLM API costs by 60%
+16. THE System SHALL use VPC Gateway Endpoints for S3 and DynamoDB to eliminate data transfer costs
+17. THE System SHALL use DynamoDB On-Demand pricing to avoid paying for idle capacity
+18. THE System SHALL use CloudFront CDN to reduce S3 GET request costs and improve latency
+19. THE System SHALL monitor costs in real-time using AWS Cost Explorer and CloudWatch metrics
+20. THE System SHALL set up AWS Budgets with alerts when costs exceed 80% of monthly budget
 
 ### Requirement 11: Session State Management
 
@@ -145,20 +169,69 @@ InterviewPrep AI is a fully autonomous interview practice and analysis platform 
 
 #### Acceptance Criteria
 
-1. WHEN network connectivity is lost, THE Session_Manager SHALL preserve interview state and resume seamlessly when connection is restored
-2. WHEN browser crashes occur, THE System SHALL recover the interview session from the last saved checkpoint
-3. WHEN interviews are paused, THE System SHALL maintain context and allow natural resumption of the conversation
-4. THE State_Persistence_System SHALL save interview progress every 30 seconds to prevent data loss
+1. WHEN network connectivity is lost, THE Session_Manager Lambda SHALL preserve interview state in DynamoDB and resume seamlessly when connection is restored
+2. WHEN browser crashes occur, THE System SHALL recover the interview session from the last saved checkpoint within 2 seconds using DynamoDB Global Secondary Index
+3. WHEN interviews are paused, THE System SHALL maintain context in DynamoDB and allow natural resumption of the conversation
+4. THE State_Persistence_System SHALL save interview progress every 30 seconds to DynamoDB to prevent data loss
 5. WHEN session timeouts occur, THE System SHALL provide clear warnings and extension options before terminating
+6. THE System SHALL use DynamoDB Global Secondary Indexes for fast session recovery queries
+7. WHEN recovering sessions, THE System SHALL use cached conversation context from ElastiCache (Redis) to reduce latency
+8. THE Session_Manager Lambda SHALL use IAM roles with least privilege access to DynamoDB tables
 
-### Requirement 12: Data Security and Privacy
+### Requirement 13: Batch vs Real-Time Processing Architecture
 
-**User Story:** As a candidate, I want my interview recordings and personal data protected with enterprise-grade security, so that I can practice confidently without privacy concerns.
+**User Story:** As a platform operator, I want clear separation between real-time and batch processing to optimize costs and performance, so that the system uses the right AWS services for each workload.
 
 #### Acceptance Criteria
 
-1. WHEN media files are uploaded, THE System SHALL encrypt all data in transit using TLS 1.3
-2. WHEN data is stored, THE System SHALL use AES-256 encryption for all audio, video, and transcript files
-3. WHEN user accounts are created, THE System SHALL implement secure authentication with password complexity requirements
-4. THE Privacy_System SHALL allow users to delete all their data permanently within 24 hours of request
-5. WHEN data is processed, THE System SHALL ensure no personally identifiable information is logged in analysis pipelines
+1. WHEN handling interview interactions, THE System SHALL use AWS Lambda for real-time processing with sub-5-second response times
+2. WHEN processing video and audio analysis, THE System SHALL use AWS Batch with EC2 Spot Instances for cost-effective batch processing
+3. WHEN a candidate submits a response, THE AI Interview Engine Lambda SHALL generate follow-up questions in real-time
+4. WHEN an interview completes, THE System SHALL trigger AWS Step Functions to orchestrate batch analysis workflows
+5. WHEN processing free tier interviews, THE System SHALL queue jobs for batch processing during off-peak hours (2-6 AM UTC) with 24-hour SLA
+6. WHEN processing premium tier interviews, THE System SHALL start batch analysis immediately with 10-minute SLA
+7. THE Real-Time Processing Layer SHALL include: API Gateway, Lambda, Cognito, DynamoDB, ElastiCache
+8. THE Batch Processing Layer SHALL include: AWS Batch, Step Functions, EC2 Spot Instances, S3, ECS
+9. WHEN AWS Batch Spot Instances are terminated, THE System SHALL automatically retry jobs on new instances without data loss
+10. THE System SHALL use AWS Step Functions to coordinate parallel execution of facial analysis and voice analysis batch jobs
+11. WHEN real-time transcription is needed, THE System SHALL use AWS Transcribe Streaming API with Lambda
+12. WHEN batch transcription is acceptable, THE System SHALL use AWS Transcribe Batch API for cost savings
+13. THE System SHALL monitor batch job queue depth and scale AWS Batch compute environments automatically
+14. THE System SHALL use separate IAM roles for real-time Lambda functions and batch processing jobs with least privilege access
+
+### Requirement 12: Data Security and Privacy
+
+**User Story:** As a candidate, I want my interview recordings and personal data protected with enterprise-grade AWS security services, so that I can practice confidently without privacy concerns.
+
+#### Acceptance Criteria
+
+1. WHEN media files are uploaded, THE System SHALL encrypt all data in transit using TLS 1.3 with certificate pinning for critical API endpoints
+2. WHEN data is stored in S3, THE System SHALL use SSE-KMS encryption with customer-managed CMK (Customer Master Key)
+3. WHEN data is stored in DynamoDB, THE System SHALL enable encryption at rest using AWS KMS
+4. WHEN user accounts are created, THE System SHALL use AWS Cognito User Pools with multi-factor authentication (MFA) enabled
+5. THE System SHALL use AWS Cognito Identity Pools to provide temporary, scoped AWS credentials for S3 uploads
+6. THE Privacy_System SHALL allow users to delete all their data permanently within 24 hours of request
+7. WHEN data is processed, THE System SHALL ensure no personally identifiable information is logged in analysis pipelines
+8. THE System SHALL use Cognito JWT tokens with 15-minute expiration for API Gateway authentication
+9. WHEN storing credentials and API keys, THE System SHALL use AWS Secrets Manager encrypted with KMS
+10. THE System SHALL rotate all secrets automatically every 90 days using Secrets Manager rotation
+11. THE System SHALL redact names, emails, and phone numbers from transcripts before analysis
+12. WHEN storing resume data, THE System SHALL implement field-level encryption using KMS data keys for PII fields
+13. THE System SHALL log all data access with timestamp, user ID, and action type to CloudWatch Logs, retaining audit logs for 2 years
+14. WHEN user deletion is requested, THE System SHALL perform cryptographic erasure by deleting KMS keys and provide deletion confirmation
+15. THE System SHALL run all Lambda functions and Batch jobs in private subnets with no internet access
+16. THE System SHALL use NAT Gateway only for essential outbound traffic to external APIs
+17. THE System SHALL implement VPC Gateway Endpoints for S3 and DynamoDB to avoid data transfer costs and internet exposure
+18. THE System SHALL implement VPC Interface Endpoints for Secrets Manager, STS, and other AWS services
+19. THE System SHALL attach AWS WAF to API Gateway and CloudFront to prevent SQL injection, XSS, and DDoS attacks
+20. THE System SHALL implement continuous security scanning with AWS GuardDuty for threat detection
+21. THE System SHALL alert on suspicious access patterns using CloudWatch Alarms and EventBridge
+22. THE System SHALL never log API keys, authentication tokens, or encryption keys in CloudWatch or application logs
+23. THE System SHALL implement IAM least privilege policies for all Lambda functions, Batch jobs, and services
+24. THE System SHALL use IAM roles (not IAM users) for all service-to-service authentication
+25. THE System SHALL deny all S3 uploads that are not encrypted with KMS using bucket policies
+26. THE System SHALL enable S3 Block Public Access on all buckets
+27. THE System SHALL enable AWS Config to monitor compliance with security best practices
+28. THE System SHALL maintain GDPR and CCPA compliance documentation
+29. THE System SHALL conduct quarterly security audits and penetration testing
+30. THE System SHALL encrypt Lambda environment variables using KMS
