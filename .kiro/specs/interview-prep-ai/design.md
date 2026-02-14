@@ -10,7 +10,123 @@ The architecture follows a microservices pattern with clear separation between r
 
 ### High-Level AWS Architecture
 
-![Architecture Diagram](./architecture-diagram.png)
+```mermaid
+graph TB
+    subgraph CLIENT["CLIENT LAYER"]
+        WEBAPP[React Web App<br/>Mobile-First PWA]
+        LOCALBATCH[Local Batch]
+        MEDIACAP[Media Capture]
+    end
+    
+    subgraph EDGE["EDGE & CDN"]
+        CF[Amazon CloudFront]
+        WAF[AWS WAF]
+    end
+    
+    subgraph API["API LAYER"]
+        APIGW[API Gateway<br/>REST]
+        WSAPI[API Gateway<br/>WebSocket]
+        COGNITO[AWS Cognito]
+    end
+    
+    subgraph REALTIME["REAL-TIME PROCESSING"]
+        AIENGINE[AI Interview<br/>Engine Lambda]
+        ORCH[Interview<br/>Orchestrator Lambda]
+        SESSMGR[Session<br/>Manager Lambda]
+    end
+    
+    subgraph BATCH["BATCH PROCESSING"]
+        SF[Step Functions<br/>Orchestrator]
+        BATCHFACE[Batch Analysis<br/>Jobs - Facial]
+        BATCHVOICE[Batch Analysis<br/>Jobs - Voice]
+        BATCHAGG[Aggregator<br/>Job]
+    end
+    
+    subgraph STORAGE["STORAGE LAYER"]
+        S3[S3 Media<br/>SSE-KMS]
+        DDB[DynamoDB<br/>KMS Encrypted]
+        REDIS[ElastiCache<br/>Redis]
+    end
+    
+    subgraph SECURITY["SECURITY"]
+        KMS[AWS KMS]
+        SECRETS[Secrets Manager]
+        GUARD[GuardDuty]
+        CONFIG[AWS Config]
+    end
+    
+    subgraph MONITORING["MONITORING"]
+        CW[CloudWatch]
+        XRAY[X-Ray]
+    end
+    
+    %% Client to Edge
+    WEBAPP --> CF
+    LOCALBATCH --> CF
+    MEDIACAP --> S3
+    
+    %% Edge to API
+    CF --> WAF
+    WAF --> APIGW
+    WAF --> WSAPI
+    
+    %% API to Auth
+    APIGW --> COGNITO
+    WSAPI --> COGNITO
+    
+    %% Auth to Real-Time
+    COGNITO --> AIENGINE
+    COGNITO --> ORCH
+    COGNITO --> SESSMGR
+    
+    %% Real-Time to Storage
+    AIENGINE --> REDIS
+    AIENGINE --> DDB
+    ORCH --> DDB
+    SESSMGR --> REDIS
+    SESSMGR --> DDB
+    
+    %% Storage to Batch
+    S3 --> SF
+    
+    %% Batch Processing Flow
+    SF --> BATCHFACE
+    SF --> BATCHVOICE
+    BATCHFACE --> BATCHAGG
+    BATCHVOICE --> BATCHAGG
+    BATCHAGG --> DDB
+    
+    %% Security Connections
+    S3 -.->|Encrypted| KMS
+    DDB -.->|Encrypted| KMS
+    AIENGINE -.->|Secrets| SECRETS
+    ORCH -.->|Secrets| SECRETS
+    
+    %% Monitoring Connections
+    APIGW --> CW
+    AIENGINE --> XRAY
+    ORCH --> XRAY
+    GUARD --> CW
+    
+    %% Styling
+    classDef clientStyle fill:#f9f,stroke:#333,stroke-width:2px
+    classDef edgeStyle fill:#bbf,stroke:#333,stroke-width:2px
+    classDef apiStyle fill:#bfb,stroke:#333,stroke-width:2px
+    classDef realtimeStyle fill:#ffb,stroke:#333,stroke-width:2px
+    classDef batchStyle fill:#fbb,stroke:#333,stroke-width:2px
+    classDef storageStyle fill:#bff,stroke:#333,stroke-width:2px
+    classDef securityStyle fill:#fdd,stroke:#333,stroke-width:2px
+    classDef monitoringStyle fill:#ddf,stroke:#333,stroke-width:2px
+    
+    class WEBAPP,LOCALBATCH,MEDIACAP clientStyle
+    class CF,WAF edgeStyle
+    class APIGW,WSAPI,COGNITO apiStyle
+    class AIENGINE,ORCH,SESSMGR realtimeStyle
+    class SF,BATCHFACE,BATCHVOICE,BATCHAGG batchStyle
+    class S3,DDB,REDIS storageStyle
+    class KMS,SECRETS,GUARD,CONFIG securityStyle
+    class CW,XRAY monitoringStyle
+```
 
 **Architecture Overview:**
 
@@ -34,7 +150,6 @@ The system follows a layered architecture with clear separation of concerns:
 - AI Interview Engine Lambda (with Provisioned Concurrency)
 - Interview Orchestrator Lambda
 - Session Manager Lambda
-- Response Cache Service Lambda
 
 **Batch Processing Layer (AWS Batch):**
 - Step Functions for workflow orchestration
